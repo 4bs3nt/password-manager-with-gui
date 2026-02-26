@@ -1,13 +1,13 @@
-import sqlite3
-from cryptography.fernet import Fernet
-from tkinter import *
-from tkinter import messagebox
-import pyperclip 
 import os
+import sqlite3
+import pyperclip
+from cryptography.fernet import Fernet
+import customtkinter as ctk
+from tkinter import Menu, messagebox
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
 password_file = os.path.join(base_dir, "pass.txt")
-db_file = os.path.join(base_dir, "passwords.sqlite")
+db_file = os.path.join(base_dir, "passwords.db")
 
 key_path = os.path.join(base_dir, "key.key")
 if not os.path.exists(key_path):
@@ -21,188 +21,263 @@ with open(key_path, "rb") as key_file:
 fernet = Fernet(key)
 
 try:
-    with open(password_file, "r") as f:#открытие файла с паролем
+    with open(password_file, "r") as f:
         security_password = f.read().strip()
 except FileNotFoundError:
-    security_password = ""#если файл не найден, то пароль не установлен
+    security_password = ""
 
-connection = sqlite3.connect(db_file)#хранение базы паролей
+connection = sqlite3.connect(db_file)
 cursor = connection.cursor()
-
 cursor.execute(
     """
-CREATE TABLE IF NOT EXISTS
-passwords(
-    name TEXT UNIQUE,
-    password TEXT
+    CREATE TABLE IF NOT EXISTS passwords(
+        name TEXT UNIQUE,
+        password TEXT
+    )
+    """
 )
-""")#создание таблицы паролей, если она не существует 
+connection.commit()
+
+ctk.set_appearance_mode("System")
+ctk.set_default_color_theme("blue")
+
+app = ctk.CTk()
+app.title("Password Storage")
+app.geometry("900x650")
+
+
+header = ctk.CTkFrame(app, corner_radius=12)
+header.pack(fill="x", padx=16, pady=(16, 8))
+
+body = ctk.CTkFrame(app, corner_radius=12)
+body.pack(fill="both", expand=True, padx=16, pady=8)
+
+footer = ctk.CTkFrame(app, corner_radius=12)
+footer.pack(fill="x", padx=16, pady=(8, 16))
+
+title_label = ctk.CTkLabel(header, text="Password Storage", font=ctk.CTkFont(size=22, weight="bold"))
+title_label.pack(padx=12, pady=12)
+
+
+scroll = ctk.CTkScrollableFrame(body, corner_radius=10)
+scroll.pack(fill="both", expand=True, padx=12, pady=12)
+
+
+menu = Menu(app, tearoff=0)
+
+
+add_button = ctk.CTkButton(footer, text="New password", width=120, state="disabled")
+add_button.pack(side="left", padx=8, pady=12)
+
+security_add = ctk.CTkButton(footer, text="Set Master Password", width=140, state="disabled")
+security_add.pack(side="left", padx=8, pady=12)
+
+
+current_selected = {"name": None, "password": None, "frame": None}
+
+def set_selected(frame, name, password):
+    if current_selected["frame"] is not None:
+        try:
+            current_selected["frame"].configure(border_width=0)
+        except Exception:
+            pass
+    current_selected["name"] = name
+    current_selected["password"] = password
+    current_selected["frame"] = frame
+    try:
+        frame.configure(border_width=2, border_color=("gray55", "gray60"))
+    except Exception:
+        pass
+
+def print_data():
+    for child in scroll.winfo_children():
+        child.destroy()
+
+    cursor.execute("SELECT name, password FROM passwords")
+    values = cursor.fetchall()
+
+    for name, enc_pass in values:
+        try:
+            decrypted_password = fernet.decrypt(enc_pass.encode()).decode()
+        except Exception:
+            decrypted_password = "[UNREADABLE]"
+
+        row = ctk.CTkFrame(scroll, corner_radius=8, border_width=0)
+        row.pack(fill="x", padx=6, pady=(4, 0))
+        row.grid_columnconfigure(0, weight=1)
+        row.grid_columnconfigure(1, weight=1)
+
+        name_label = ctk.CTkLabel(row, text=f"Name: {name}", anchor="w")
+        name_label.grid(row=0, column=0, sticky="ew", padx=10, pady=8)
+
+        pass_label = ctk.CTkLabel(row, text=f"Password: {decrypted_password}", anchor="e")
+        pass_label.grid(row=0, column=1, sticky="ew", padx=10, pady=8)
+
+
+        def bind_all(widget):
+            widget.bind("<Button-1>", lambda e, fr=row, n=name, p=decrypted_password: set_selected(fr, n, p))
+            widget.bind("<Button-3>", lambda e, fr=row, n=name, p=decrypted_password: on_right_click(e, fr, n, p))
+
+        bind_all(row)
+        bind_all(name_label)
+        bind_all(pass_label)
+
+
+        sep = ctk.CTkFrame(scroll, height=1, fg_color=("gray75", "gray25"))
+        sep.pack(fill="x", padx=6, pady=(4, 4))
+
+def add_data(name: str, password: str):
+    if not name or not password:
+        messagebox.showerror("Error", "Fields cant be empty")
+        return
+    try:
+        encrypted_password = fernet.encrypt(password.encode()).decode()
+        cursor.execute(
+            "INSERT INTO passwords(name, password) VALUES (?, ?)",
+            (name, encrypted_password)
+        )
+        connection.commit()
+        print_data()
+    except sqlite3.IntegrityError:
+        messagebox.showerror("Error", "Name must be unique!")
+
+def delete_data(name: str):
+    cursor.execute("DELETE FROM passwords WHERE name = ?", (name,))
+    connection.commit()
+    print_data()
+
+def ensure_selected():
+    if current_selected["name"] is None:
+        messagebox.showerror("Error", "Select a row first")
+        return False
+    return True
 
 def copy_name():
-    selected = listbox.get(listbox.curselection())
-    name = selected.split("Name: ")[1].split("    Password:")[0]#сначало сплитить имя выводя массив с паролем и именем, потом выбрать имя в следующей строке 
-    pyperclip.copy(name)
+    if not ensure_selected():
+        return
+    pyperclip.copy(current_selected["name"])
 
 def copy_password():
-    selected = listbox.get(listbox.curselection())
-    password = selected.split("Password: ")[1]#сплит пароля -> остается только пароль и копирование в следующей строке 
-    pyperclip.copy(password)
+    if not ensure_selected():
+        return
+    pyperclip.copy(current_selected["password"])
 
 def copy_all():
-    pyperclip.copy(listbox.get(listbox.curselection()))#копирует всё выбранное поле в листбоксе
+    if not ensure_selected():
+        return
+    pyperclip.copy(f"Name: {current_selected['name']}    Password: {current_selected['password']}")
 
 def delete_combo():
-    selected = listbox.get(listbox.curselection())
-    name = selected.split("Name: ")[1].split("     Password:")[0]
-    delete_data(name)
+    if not ensure_selected():
+        return
+    delete_data(current_selected["name"])
 
-def show_menu(event):
-    menu.post(event.x_root, event.y_root)#функция для вызова меню при нажатии правой кнопки мыши
+def on_right_click(event, frame, name, password):
+    set_selected(frame, name, password)
+    try:
+        menu.tk_popup(event.x_root, event.y_root)
+    finally:
+        menu.grab_release()
 
-def add_data(name, password):#добавление данные в таблицу
-    if not name or not password:
-        messagebox.showerror("Error","Fields cant be empty")
+def add_data_btn():
+    win = ctk.CTkToplevel(app)
+    win.title("Add Data")
+    win.geometry("360x240")
+    win.grab_set()
+
+    frame = ctk.CTkFrame(win, corner_radius=12)
+    frame.pack(fill="both", expand=True, padx=12, pady=12)
+
+    name_label = ctk.CTkLabel(frame, text="Name")
+    name_label.pack(pady=(10, 4))
+    name_entry = ctk.CTkEntry(frame, width=260, placeholder_text="service/login")
+    name_entry.pack(pady=4)
+
+    pass_label = ctk.CTkLabel(frame, text="Password")
+    pass_label.pack(pady=(10, 4))
+    pass_entry = ctk.CTkEntry(frame, width=260, show="•", placeholder_text="password")
+    pass_entry.pack(pady=4)
+
+    def on_add():
+        add_data(name_entry.get().strip(), pass_entry.get())
+        win.destroy()
+
+    btn = ctk.CTkButton(frame, text="Add combo", command=on_add)
+    btn.pack(pady=12)
+
+def security_to_file(win, value: str):
+    with open(password_file, "w") as f:
+        enc = fernet.encrypt(value.encode()).decode()
+        f.write(enc)
+    win.destroy()
+
+def security_add_btn():
+    win = ctk.CTkToplevel(app)
+    win.title("Add Security")
+    win.geometry("360x180")
+    win.grab_set()
+
+    frame = ctk.CTkFrame(win, corner_radius=12)
+    frame.pack(fill="both", expand=True, padx=12, pady=12)
+
+    label = ctk.CTkLabel(frame, text="New Security Password")
+    label.pack(pady=(10, 6))
+    entry = ctk.CTkEntry(frame, width=260, show="•", placeholder_text="new master password")
+    entry.pack(pady=6)
+
+    btn = ctk.CTkButton(frame, text="Add", command=lambda: security_to_file(win, entry.get()))
+    btn.pack(pady=12)
+
+def security_check(entry, win):
+    try:
+        with open(password_file, "r") as f:
+            enc = f.read().strip()
+        password_decrypted = fernet.decrypt(enc.encode()).decode()
+    except Exception:
+        password_decrypted = ""
+
+    if entry.get() == password_decrypted:
+        win.destroy()
+        print_data()
+        add_button.configure(state="normal")
+        security_add.configure(state="normal")
     else:
-        try:
-            encrypted_password = fernet.encrypt(password.encode()).decode()
-            cursor.execute(
-                """
-            INSERT INTO 
-                passwords(name, password)
-            VALUES 
-                (?,?)
-            """,
-                (name, encrypted_password)
+        messagebox.showerror("Error", "Invalid security code")
 
-                           )
-            connection.commit()
-            print_data()#помогает обновить данные в таблице
-        except sqlite3.IntegrityError:
-            messagebox.showerror("Error","Name must be unique!")
+add_button.configure(command=add_data_btn)
+security_add.configure(command=security_add_btn)
 
-
-def add_data_btn():#функция кнопки добавления данных 
-    adds = Toplevel(password_window)
-    adds.title("Add Data")
-    adds.geometry("300x200")
-
-    name_label = Label(adds, text="Name")
-    name_label.pack()
-    name_entry = Entry(adds)
-    name_entry.pack()
-
-    password_label = Label(adds, text="Password")
-    password_label.pack()
-    password_entry = Entry(adds)
-    password_entry.pack()
-
-    btn1 = Button(adds, text="Add combo", command=lambda: add_data(name_entry.get(), password_entry.get()))#получаем данные из полей ввода и добавляем в таблицу(без лямбды не работает)
-    btn1.pack()
-    
-def delete_data(name):#удаление данных из таблицы
-    cursor.execute(
-        """
-        DELETE FROM passwords 
-        WHERE name = ? 
-        """,
-        (name,)   
-    )
-    connection.commit()
-    print_data()#помогает обновить данные в таблице
-
-def security_check():#проверка пароля
-    if security_entry.get() == security_password:#если пароль введенный в окне совпадает с паролем в файле, то открывается доступ к программе 
-        security_window.destroy()#окно для ввода пароля закрывается
-        print_data()#вывод базы данных в листбокс
-        add_button.config(state=NORMAL)#кнопки добавления, удаления и добавления пароля становятся активными
-        security_add.config(state=NORMAL)
-    else:
-        messagebox.showerror("Error", "Invalid security code")#если пароль не совпадает, то выводится сообщение об ошибке
-
-def security_add_btn():#добавление пароля
-    add_security = Toplevel(password_window)#окно для ввода пароля
-    add_security.title("Add Security")
-    add_security.geometry("300x200")
-
-    security_label = Label(add_security, text="Security")
-    security_label.pack()
-
-    security_key = Entry(add_security)#поле для ввода пароля
-    security_key.pack()
-
-
-    btn3 = Button(add_security, text="Add", command=lambda: security_to_file(security_key.get()))#кнопка для добавления пароля
-    btn3.pack()
-
-    def security_to_file(security_key):#добавление пароля в файл
-        # Записываем пароль в файл
-        with open(password_file, "w") as f:
-            f.write(security_key)
-        add_security.destroy()#окно для ввода пароля закрывается
-    
-def print_data():#вывод данных в листбокс
-
-    cursor.execute("SELECT * FROM passwords")
-    values = cursor.fetchall()
-    listbox.delete(0, END)#полная очистка листбокса 
-    for value in values:
-        try:
-            decrypted_password = fernet.decrypt(value[1].encode()).decode()
-        except:
-            decrypted_password = "[UNREADABLE]"
-        print(f"name: {value[0]}, password: {decrypted_password}")
-        listbox.insert(END, "Name: " + value[0] + "    " + " Password: " + decrypted_password)#добавляет данные в листбокс в ввиде:   Name:что-то Password: что-то
-
-password_window = Tk()#основное окно 
-password_window.title("Password Storage")
-password_window.geometry("1000x750")
-
-
-text = Label(password_window, text="Password Storage")#текст в окне
-text.pack()
-
-listbox = Listbox(password_window, width=150, height=30, selectmode=SINGLE)#листбокс для показа данных
-listbox.pack()
-
-add_button = Button(password_window, text="Add", command=add_data_btn, width=10, height=2, state=DISABLED)#кнопка добавления данных
-add_button.pack(anchor=S)
-
-security_add = Button(password_window, text="Add Security", command=security_add_btn, width=10, height=2, state=DISABLED)#кнопка для добавления пароля
-security_add.pack(anchor=S)
-
-menu = Menu(password_window, tearoff=0)#меню при нажатии правой кнопки мыши
-
-menu.add_command(label="Copy Name", command=copy_name)#копирование имени
-menu.add_command(label="Copy Password", command=copy_password)#копирование пароля
-menu.add_command(label="Copy All", command=copy_all)#копирование всего поля
+menu.add_command(label="Copy Name", command=copy_name)
+menu.add_command(label="Copy Password", command=copy_password)
+menu.add_command(label="Copy All", command=copy_all)
 menu.add_command(label="Delete combo", command=delete_combo)
 
-listbox.bind("<Button-3>", show_menu)#при нажатии правой кнопки мыши вызывается меню
+if security_password == "":
+    print_data()
+    add_button.configure(state="normal")
+    security_add.configure(state="normal")
+else:
+    sec_win = ctk.CTkToplevel(app)
+    sec_win.title("Security")
+    sec_win.geometry("360x160")
+    sec_win.grab_set()
 
-if security_password == "":#если пароль не установлен, то открывается доступ к программе 
-    print_data()#вывод базы данных в листбокс
-    add_button.config(state=NORMAL)#кнопки добавления, добавления пароля становятся активными
-    security_add.config(state=NORMAL)
+    frame = ctk.CTkFrame(sec_win, corner_radius=12)
+    frame.pack(fill="both", expand=True, padx=12, pady=12)
 
+    lbl = ctk.CTkLabel(frame, text="Security Check")
+    lbl.pack(pady=(10, 6))
+    sec_entry = ctk.CTkEntry(frame, width=260, show="•", placeholder_text="master password")
+    sec_entry.pack(pady=6)
+    btn = ctk.CTkButton(frame, text="Check", command=lambda: security_check(sec_entry, sec_win))
+    btn.pack(pady=10)
 
-else:#если пароль установлен, то открывается окно для ввода пароля
-    security_window = Tk()
-    security_window.title("Security")
-    security_window.geometry("300x100")
+def on_close():
+    try:
+        connection.close()
+    except Exception:
+        pass
+    app.destroy()
 
-    security_label = Label(security_window, text="Security Check")
-    security_label.pack()
-
-    security_entry = Entry(security_window)
-    security_entry.pack()
-
-    security_button = Button(security_window, text="Check", command=lambda: security_check())
-    security_button.pack()
-
-password_window.mainloop()
-
-
-
-
-
-
+app.protocol("WM_DELETE_WINDOW", on_close)
+app.mainloop()
